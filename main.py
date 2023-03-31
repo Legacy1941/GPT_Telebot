@@ -40,7 +40,6 @@ class WorkWithBase:
             self.conn.rollback()
         self.conn.close()
 
-
 class UserDatabase:
     def __init__(self, db_name):
         self.conn = sqlite3.connect(db_name)
@@ -122,6 +121,39 @@ class WorkingInDatabase:
             bot.send_message(message.from_user.id, 'Непредвиденная ошибка во время смены модели.')
             print(Mistake)
 
+    # Получение параметров для обращения к определенной модели 
+    def get_models_from_users(self, message):
+        db = WorkWithBase('user_base.db')
+        records = db.to_get_data(f"""SELECT user_model from users WHERE id = {message.from_user.id}""")
+        db = WorkWithBase('user_base.db')
+        # records = db.to_get_data(f"""SELECT * from models WHERE name_model = {records[0][0]}""")
+        records = db.to_get_data(f"SELECT * from models WHERE name_model = '{str(records[0][0])}'")
+        return records  
+    # 
+
+    # Формирование respons'a
+    def making_response(self, message):
+        params = WorkingInDatabase.get_models_from_users(self,message)
+        if params[0][1] == 'gpt-3.5-turbo':
+          userMessage = [{'content': message.text, 'role': "user"}]
+          request =  openai.ChatCompletion.create(
+                    model               = params[0][1],
+                    messages            = userMessage,
+                    temperature         = params[0][2],
+                    top_p               = params[0][3],
+                    frequency_penalty   = params[0][4],
+                    presence_penalty    = params[0][5],) 
+          return request['choices'][0]['message']['content']
+        elif params[0][1] == 'text-davinci-003':
+            request =  openai.Completion.create(
+                    model               = params[0][1],
+                    prompt              = message.text,
+                    temperature         = params[0][2],
+                    top_p               = params[0][3],
+                    frequency_penalty   = params[0][4],
+                    presence_penalty    = params[0][5],)  
+            return request['choices'][0]['text']   
+
     def get_user_model(self, message):
         pass 
 
@@ -154,10 +186,6 @@ class UserAction:
         elif self.text == 'Разблокировать пользователя':
             send = bot.send_message(self.from_user.id,f'Введите ID пользователя:', reply_markup=types.ReplyKeyboardRemove())
             bot.register_next_step_handler(send, db.un_block_User)
-
-
-
-          
 
 @bot.message_handler(commands=['edit_model'])
 def send_model(message):
@@ -207,35 +235,38 @@ def gpt_message(message):
     global last_message
     db = WorkingInDatabase()
     if len(db.check_ban_state(message)) < 1:
-        if count <=1:
-            userMessage = [{'content': message.text,'role': "user"}]
+        # if count <=1:
+            # userMessage = [{'content': message.text + ' Контекст: ' + last_message,'role': "user"}]
             try:
                 count += 1
                 botMessage = bot.send_message(chat_id=message.from_user.id, text='⌛️ Подготовка ответа...')
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages= userMessage,
-                    temperature= 0.2,
-                    top_p=0.0,
-                    frequency_penalty= 0.4,
-                    presence_penalty= 0.0,)  
+                # Выбор модели - gpt / davinchi
+                response = db.making_response(message)
+                # response = openai.ChatCompletion.create(
+                #     model="gpt-3.5-turbo",
+                #     messages= userMessage,
+                #     temperature= 0.2,
+                #     top_p=0.0,
+                #     frequency_penalty= 0.4,
+                #     presence_penalty= 0.0,)  
                 bot.delete_message(chat_id=message.chat.id, message_id=botMessage.message_id)
             except Exception as Mistake:
+                print(Mistake)
                 bot.reply_to(message, text='Во время отправки сообщения произошла ошибка, попробуйте повторить вопрос или повторить попытку позже.')
                 return False
             try:
-                for messageText in util.smart_split(response['choices'][0]['message']['content'], 3000):
+                for messageText in util.smart_split(response, 3000):
                     bot.reply_to(message, messageText)
                     count -= 1
-                last_message = ''
-                last_message = 'Вопрос: ' + userMessage[0]['content'] +  ' Ответ: ' + response['choices'][0]['message']['content'].strip()
+                # last_message = ''
+                # last_message = 'Вопрос: ' + userMessage[0]['content'] +  ' Ответ: ' + response['choices'][0]['message']['content'].strip()
             except Exception as Mistake:
                 bot.send_message(chat_id=message.from_user.id, text='К сожалению, похоже сеть перегружена, повтори вопрос или попробуй позже:')
                 print(Mistake)
                 count -= 1
-        else:
-            bot.send_message(message.from_user.id, 'Количество одновременных запросов не может превышать больше 2')
-            count -= 1
+        # else:
+        #     bot.send_message(message.from_user.id, 'Количество одновременных запросов не может превышать больше 2')
+        #     count -= 1
     else:
         bot.send_message(message.from_user.id, 'Вам было запрещено использовать BabyGPT')
         count -= 1
