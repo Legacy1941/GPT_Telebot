@@ -1,8 +1,9 @@
 import telebot
 import openai
 import sqlite3
-import threading
+import urllib
 
+from io import BytesIO
 from telebot import util, types
 from config import bot_token, openAI_token
 
@@ -11,6 +12,20 @@ openai.api_key = openAI_token
 bot = telebot.TeleBot(API_TOKEN, num_threads=40)
 count = 0
 last_message = ''
+
+def gen_img(message):
+    bot_message = bot.send_message(message.from_user.id, '🏞 Генерация изображения...')
+    response = openai.Image.create(
+    prompt=message.text,
+    n=2,
+    size="1024x1024"
+    )
+    
+    img = BytesIO(urllib.request.urlopen(response['data'][0]['url']).read())
+
+    bot.delete_message(message.from_user.id, bot_message.message_id)
+    bot.send_chat_action(message.from_user.id, 'upload_photo')
+    bot.send_photo(message.from_user.id, img, reply_to_message_id=message.message_id)
 
 class WorkWithBase:
     def __init__(self, db_name):
@@ -130,12 +145,11 @@ class WorkingInDatabase:
         records = db.to_get_data(f"SELECT * from models WHERE name_model = '{str(records[0][0])}'")
         return records  
     # 
-
     # Формирование respons'a
     def making_response(self, message):
         params = WorkingInDatabase.get_models_from_users(self,message)
         if params[0][1] == 'gpt-3.5-turbo':
-          userMessage = [{'content': message.text, 'role': "user"}]
+          userMessage = [{'content': message.text + ' Контекст: ' + last_message,'role': "user"}]
           request =  openai.ChatCompletion.create(
                     model               = params[0][1],
                     messages            = userMessage,
@@ -147,7 +161,7 @@ class WorkingInDatabase:
         elif params[0][1] == 'text-davinci-003':
             request =  openai.Completion.create(
                     model               = params[0][1],
-                    prompt              = message.text,
+                    prompt              =  message.text + ' Контекст: ' + last_message,
                     temperature         = params[0][2],
                     top_p               = params[0][3],
                     frequency_penalty   = params[0][4],
@@ -186,6 +200,8 @@ class UserAction:
         elif self.text == 'Разблокировать пользователя':
             send = bot.send_message(self.from_user.id,f'Введите ID пользователя:', reply_markup=types.ReplyKeyboardRemove())
             bot.register_next_step_handler(send, db.un_block_User)
+
+
 
 @bot.message_handler(commands=['edit_model'])
 def send_model(message):
@@ -229,6 +245,15 @@ def create_adminPanel(message):
     else:
         bot.send_message(message.from_user.id, "У вас нет доступа к панели администратора!")
 
+@bot.message_handler(commands=['image_generation'])
+def image_generation(message):
+    send = bot.send_message(message.from_user.id, text='Задайте параметры для изображения')
+
+    bot.register_next_step_handler(send, gen_img)
+        
+
+
+
 @bot.message_handler(chat_types=['private'], func=lambda message: True)
 def gpt_message(message):
     global count
@@ -258,8 +283,8 @@ def gpt_message(message):
                 for messageText in util.smart_split(response, 3000):
                     bot.reply_to(message, messageText)
                     count -= 1
-                # last_message = ''
-                # last_message = 'Вопрос: ' + userMessage[0]['content'] +  ' Ответ: ' + response['choices'][0]['message']['content'].strip()
+                last_message = ''
+                last_message = 'Вопрос: ' + message.text +  ' Ответ: ' + response.strip()
             except Exception as Mistake:
                 bot.send_message(chat_id=message.from_user.id, text='К сожалению, похоже сеть перегружена, повтори вопрос или попробуй позже:')
                 print(Mistake)
